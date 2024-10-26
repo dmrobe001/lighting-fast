@@ -1,31 +1,22 @@
 async function loadTexture(device, url) {
-    const image = new Image();
-    image.src = url;
     
     return new Promise((resolve) => {
-        image.onload = () => {
-            const textureDescriptor = {
-                size: [image.width, image.height, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING |// |
-                       // GPUTextureUsage.STORAGE_BINDING |
-                        GPUTextureUsage.COPY_DST |
-                        GPUTextureUsage.RENDER_ATTACHMENT,
-            };
-            
-            const texture = device.createTexture(textureDescriptor);
-            
-            // Copy image data into the texture
-            const imageBitmap = createImageBitmap(image);
-            imageBitmap.then((bitmap) => {
-                device.queue.copyExternalImageToTexture(
-                    { source: bitmap },
-                    { texture: texture },
-                    [image.width, image.height]
-                );
-                resolve(texture);
-            });
-        };
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const source = await createImageBitmap(blob, { colorSpaceConversion: 'none' });    
+        const texture = device.createTexture({
+            label: url,
+            format: 'rgba8unorm',
+            size: [source.width, source.height],
+            usage: GPUTextureUsage.COPY_DST |
+                   GPUTextureUsage.TEXTURE_BINDING |
+                   GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        device.queue.copyExternalImageToTexture(
+            { source, flipY: true },
+            { texture },
+            { width: source.width, height: source.height },
+        );
     });
 }
 
