@@ -1,0 +1,10 @@
+{
+    "compilerOptions": {
+      "target": "ESNext",
+      "module": "esnext",
+      "types": ["@webgpu/types"],
+    },
+    "files": [
+      "main.ts",
+    ]
+}

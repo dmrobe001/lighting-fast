@@ -18,7 +18,6 @@ struct Scene {
     up: vec3<f32>,      // 12 bytes for vec3, padded to 16 bytes
     _padding3: f32,     // 4 bytes of padding after vec3
     right: vec3<f32>,   // 12 bytes for vec3, padded to 16 bytes
-    _padding4: f32,     // 4 bytes of padding after vec3
     fovScale: f32,      // Single f32 value, aligned to 4 bytes
 };
 
@@ -29,7 +28,7 @@ struct Scene {
 @group(0) @binding(3) var skyboxTexture  : texture_2d<f32>;
 //@group(0) @binding(4) var skyboxSampler: sampler;
 
-fn skybox(direction: vec3<f32>) -> vec3<f32> {
+fn checkered_skybox(direction: vec3<f32>) -> vec3<f32> {
     // Convert the direction to texture coordinates (u, v)
     let u = (atan2(direction.z, direction.x) / (2.0 * 3.14159)) + 0.5;
     let v = (asin(direction.y) / 3.14159) + 0.5;
@@ -64,16 +63,16 @@ fn reflect(inVec: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     return inVec - 2.0 * dot(inVec, normal) * normal;
 }
 
-// Skybox checkerboard pattern based on latitude and longitude
-//fn skybox(direction: vec3<f32>) -> vec3<f32> {
-//    let u = atan2(direction.z, direction.x) / (2.0 * 3.14159) + 0.5;
-//    let v = asin(direction.y) / 3.14159 + 0.5;
-//
-//    let checkSize = 10.0;
-//    let checks = step(0.5, fract(u * checkSize)) == step(0.5, fract(v * checkSize));
-//
-//    return mix(scene.skyColors[0], scene.skyColors[1], f32(checks));
-//}
+// Skybox from an image
+fn texture_skybox(direction: vec3<f32>) -> vec3<f32> {
+   let u = atan2(direction.z, direction.x) / (2.0 * 3.14159) + 0.5;
+   let v = asin(direction.y) / 3.14159 + 0.5;
+
+   let checkSize = 10.0;
+   let checks = step(0.5, fract(u * checkSize)) == step(0.5, fract(v * checkSize));
+
+   return mix(scene.skyColors[0], scene.skyColors[1], f32(checks));
+}
 
 // Compute the color for a single pixel using iterative ray tracing
 fn trace(ray: Ray) -> vec3<f32> {
@@ -97,7 +96,7 @@ fn trace(ray: Ray) -> vec3<f32> {
 
         // If no sphere was hit, return the skybox color
         if hitSphere == arrayLength(&sphereData) {
-            color += throughput * skybox(currentRay.direction);
+            color += throughput * checkered_skybox(currentRay.direction);
             break;
         }
 
@@ -131,37 +130,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = f32(global_id.x) / f32(width) * 2.0 - 1.0;
     let y = f32(global_id.y) / f32(height) * 2.0 - 1.0;
 
-    // Define the camera position and ray direction
-    //let rayOrigin = vec3<f32>(0.0, 0.0, 5.0);// Define camera parameters
-    
-    //let fov: f32 = 120.0;        // Field of view in degrees
-    //let theta: f32 = radians(0.0); // Angle away from the yz plane (rotation around y-axis)
-    //let phi: f32 = radians(00.0);   // Angle away from the xz plane (rotation around x-axis)
-
-    // Convert FOV to a scaling factor for the screen mapping
-    //let fovScale = tan(radians(fov) / 2.0);  // Calculate scaling based on half-FOV
-
     // Apply FOV scaling
     let screenX = scene.fovScale * x;
     let screenY = -scene.fovScale * y;
-
-    // Calculate the forward (z-direction) ray direction based on rotation angles (theta, phi)
-    //let forward = vec3<f32>(
-    //    cos(phi) * sin(theta),  // x component (rotation around the y-axis)
-    //    sin(phi),               // y component (rotation around the x-axis)
-    //    -cos(phi) * cos(theta)  // z component
-    //);
-
-    // Right and up vectors for orientation
-    //let right = normalize(vec3<f32>(sin(theta + 3.14159 / 2.0), 0.0, cos(theta + 3.14159 / 2.0))); // Perpendicular to forward in xz-plane
-    //let up = normalize(cross(right, forward));  // Perpendicular to both forward and right
-
+    
     // Compute the ray direction using orientation and the FOV-scaled screen coordinates
     let rayDirection = normalize(scene.forward + screenX * scene.right + screenY * scene.up);
 
     let ray = Ray(scene.origin, rayDirection);
     let color = trace(ray);//vec3<f32>(1.0-scene.fovScale, 0.0, 0.0);//
-
+    
     // Write the result to the output texture
     textureStore(writeTexture, vec2<i32>(i32(global_id.x), i32(global_id.y)), vec4<f32>(color, 1.0));
 }
