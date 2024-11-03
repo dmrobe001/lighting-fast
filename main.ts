@@ -1,4 +1,7 @@
 
+
+let canvas:HTMLCanvasElement;
+
 /**
 * Create a texture from an image url.
 * 
@@ -55,28 +58,38 @@ const GameState = {
     moveback:    0,
     moveSpeed: 0.05,
 
-    get fovScale() {
-        return Math.tan((this.fov * Math.PI / 180) / 2.0);
-    },
+    // Sphere data
+    sphereData : new Float32Array([
+        // Define sphere positions and radii
+        0.0, 0.0, 0.0, 1.0,
+        3.0, 0.0, 0.0, 1.0,
+        -2.0, 2.0, 0.0, 0.1,
+    ]),
+}
 
-    get forward() { return [ Math.cos(this.phi) * Math.sin(this.theta), Math.sin(this.phi), Math.cos(this.phi) *-Math.cos(this.theta)];},
-    get right()   { return [                     -Math.cos(this.theta),                0.0,                     -Math.sin(this.theta)];},
-    get front()   { return [                      Math.sin(this.theta),                0.0,                     -Math.cos(this.theta)];},
-    get up()      { return [-Math.sin(this.phi) * Math.sin(this.theta), Math.cos(this.phi), Math.sin(this.phi) * Math.cos(this.theta)];},
+const DerivedState = {
+
+    get fovScale() {
+        return Math.tan((GameState.fov * Math.PI / 180) / 2.0);
+    },
+    get forward() { return [ Math.cos(GameState.phi) * Math.sin(GameState.theta), Math.sin(GameState.phi), Math.cos(GameState.phi) *-Math.cos(GameState.theta)];},
+    get right()   { return [                          -Math.cos(GameState.theta),                     0.0,                          -Math.sin(GameState.theta)];},
+    get front()   { return [                           Math.sin(GameState.theta),                     0.0,                          -Math.cos(GameState.theta)];},
+    get up()      { return [-Math.sin(GameState.phi) * Math.sin(GameState.theta), Math.cos(GameState.phi), Math.sin(GameState.phi) * Math.cos(GameState.theta)];},
     
     move_camera: function(){
-        if (this.moveKeys>0) {
+        if (GameState.moveKeys>0) {
             const dx=[0,0,0];
             for (let i=0;i<3;i+=1){
-                dx[i]+=this.front[i]*(this.moveforward+this.moveback);
-                dx[i]+=this.right[i]*(this.moveright+this.moveleft);
+                dx[i]+=this.front[i]*(GameState.moveforward+GameState.moveback);
+                dx[i]+=this.right[i]*(GameState.moveright+GameState.moveleft);
             }
-            dx[1]+=1*(this.moveup+this.movedown);
+            dx[1]+=1*(GameState.moveup+GameState.movedown);
             const magnitude=Math.sqrt(dx[0]*dx[0]+dx[1]*dx[1]+dx[2]*dx[2]);
             
             if (magnitude > .00001){
                 for (let i=0;i<3;i++){
-                    this.cameraPosition[i]+=dx[i]/magnitude*this.moveSpeed;
+                    GameState.cameraPosition[i]+=dx[i]/magnitude*GameState.moveSpeed;
                 }   
             }
         }
@@ -88,34 +101,37 @@ const GameState = {
             // to be aligned to 4x the size of their element type.
 
             // checkered skybox colors
-            ...this.skyColors[0]   , 0.0,
-            ...this.skyColors[1]   , 0.0,
+            ...GameState.skyColors[0]   , 0.0,
+            ...GameState.skyColors[1]   , 0.0,
             
             // Camera parameters
-            ...this.cameraPosition , 0.0,
+            ...GameState.cameraPosition , 0.0,
             ...this.forward        , 0.0,
             ...this.up             , 0.0,
             ...this.right,
             this.fovScale
         ]);
     },
-    //get buffersize(){
-    //    return this.buffer.length / 4;
-   // }
+
+
 }
 
+const PlayerSettings = {
+    // Adjust these scales to change how sensitive the mouse movement is relative to the FOV
+    mouseSensitivity:1,
+    scrollSensitivity:0.01,
+    width:100,
+    height:100
+}
+    
 
 async function initWebGPU() {
 
-    // Adjust these scales to change how sensitive the mouse movement is relative to the FOV
-    const mouseSensitivity = 1;//0.005;
-    const scrollSensitivity = 0.01;
     
     // Initialize WebGPU
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
     
-    const canvas = document.querySelector('canvas');
     const context = canvas.getContext('webgpu');
     
     const swapChainFormat = 'rgba8unorm';
@@ -123,52 +139,32 @@ async function initWebGPU() {
         device,
         format: swapChainFormat,
         usage: GPUTextureUsage.TEXTURE_BINDING |
-                       //GPUTextureUsage.STORAGE_BINDING |
                        GPUTextureUsage.COPY_DST |
                        GPUTextureUsage.RENDER_ATTACHMENT,
     });
     
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    // Sphere data
-    const sphereData = new Float32Array([
-        // Define sphere positions and radii
-        0.0, 0.0, 0.0, 1.0, // Sphere 1: Center (0, 0, 0), Radius 1
-        3.0, 0.0, 0.0, 1.0, // Sphere 2
-        -2.0, 2.0, 0.0, 0.1, // Sphere 2
-        // Add more spheres as needed
-    ]);
-    
-    
-
-    // Dynamically calculate the total buffer size
-    const numSpheres = sphereData.length / 4; // Each sphere has 4 components (x, y, z, radius)
-    const sphereDataSize = numSpheres * 4 * 4; // Each sphere component is a 32-bit float (4 bytes)
-    //const sceneDataSize = 112;//Math.ceil((19 * 4) / 16) * 16; // Two RGB colors (3 floats each) * 4 bytes per float // 96;//
     
     // Create a buffer for sphere data
     const sphereBuffer = device.createBuffer({
-        size: sphereDataSize,
-        usage: GPUBufferUsage.STORAGE   | GPUBufferUsage.COPY_DST,
+        size: GameState.sphereData.length * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         mappedAtCreation: true,
     });
     
     const skyboxTexture = await loadTexture(device, 'starmap_2020_4k_print.jpg');
     
     // Fill the sphere buffer with sphere data
-    new Float32Array(sphereBuffer.getMappedRange()).set(sphereData);
+    new Float32Array(sphereBuffer.getMappedRange()).set(GameState.sphereData);
     sphereBuffer.unmap();
     
     const sceneBuffer = device.createBuffer({
-        size: GameState.buffer.length*4,
-        usage: GPUBufferUsage.UNIFORM  | GPUBufferUsage.COPY_DST,
+        size: DerivedState.buffer.length*4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         mappedAtCreation: false,
     });
     
-
-    const computeTexture=device.createTexture( {
-        size: [width, height, 1],
+    const computeTexture = device.createTexture( {
+        size: [PlayerSettings.width, PlayerSettings.height, 1],
         format: 'rgba8unorm',
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
@@ -257,7 +253,7 @@ async function initWebGPU() {
     });
     
     // Create bind groups
-    function createBindGroup(currentSceneBuffer,writeTexture) {
+    function createBindGroup(currentSceneBuffer:GPUBuffer,writeTexture:GPUTexture) {
         return device.createBindGroup({
             layout: bindGroupLayout,
             entries: [
@@ -278,7 +274,7 @@ async function initWebGPU() {
     });
 
     // Add function to blit the texture to the canvas
-    function blitTextureToCanvas(texture) {
+    function blitTextureToCanvas(texture: GPUTexture) {
         const commandEncoder = device.createCommandEncoder();
 
         const renderPassDescriptor:GPURenderPassDescriptor = {
@@ -307,8 +303,8 @@ async function initWebGPU() {
     
     // 
     async function renderFrame() {
-        GameState.move_camera();
-        const paddedSceneData = GameState.buffer;
+        DerivedState.move_camera();
+        const paddedSceneData = DerivedState.buffer;
         
         device.queue.writeBuffer(sceneBuffer, 0, paddedSceneData.buffer, 0, paddedSceneData.length*4);
         const bindGroup = createBindGroup(sceneBuffer,computeTexture);
@@ -318,7 +314,7 @@ async function initWebGPU() {
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(computePipeline);
         passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
+        passEncoder.dispatchWorkgroups(Math.ceil(PlayerSettings.width / 16), Math.ceil(PlayerSettings.height / 16));
         passEncoder.end();
         
         // Submit the commands
@@ -344,14 +340,25 @@ async function initWebGPU() {
         requestAnimationFrame(renderFrame);
     }
     
+    // Start rendering loop
+    renderFrame();
+}
+
+
+
+window.onload=function(){
+    canvas = document.querySelector('canvas');
+    PlayerSettings.width = canvas.width;
+    PlayerSettings.height = canvas.height;
+
     document.addEventListener('mousemove', (event) => {
         if (document.pointerLockElement === canvas) {
             const deltaX = event.movementX;
             const deltaY = event.movementY;
             
             // Adjust the angles based on mouse movement and FOV
-            GameState.theta -= deltaX * mouseSensitivity * GameState.fov/180*Math.PI / width;
-            GameState.phi -= deltaY * mouseSensitivity * GameState.fov/180*Math.PI / height;
+            GameState.theta -= deltaX * PlayerSettings.mouseSensitivity * GameState.fov/180*Math.PI / PlayerSettings.width;
+            GameState.phi -= deltaY * PlayerSettings.mouseSensitivity * GameState.fov/180*Math.PI / PlayerSettings.height;
             
             // Clamp phi to avoid flipping the camera (staying within -90 to 90 degrees)
             GameState.phi = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, GameState.phi));
@@ -387,7 +394,7 @@ async function initWebGPU() {
                 GameState.fov /= pinchDelta//* fov / 180 * Math.PI// * scrollSensitivity * 0.1;  // Adjust the scaling factor as needed
     
                 // Clamp FOV between 30 and 150 degrees to avoid extreme distortion
-                GameState.fov = Math.max(30.0, Math.min(150.0, GameState.fov));
+                GameState.fov = Math.max(1.0, Math.min(150.0, GameState.fov));
     
                 // Update initial pinch distance for smooth continuous zooming
                 initialPinchDistance = currentPinchDistance;
@@ -404,8 +411,8 @@ async function initWebGPU() {
                 const deltaY = lastTouchY - touchY;
     
                 // Adjust angles based on touch movement and FOV
-                GameState.theta -= deltaX * mouseSensitivity * GameState.fov / 180 * Math.PI / width;
-                GameState.phi -= deltaY * mouseSensitivity * GameState.fov / 180 * Math.PI / height;
+                GameState.theta -= deltaX * PlayerSettings.mouseSensitivity * GameState.fov / 180 * Math.PI / PlayerSettings.width;
+                GameState.phi -= deltaY * PlayerSettings.mouseSensitivity * GameState.fov / 180 * Math.PI / PlayerSettings.height;
     
                 // Clamp phi to avoid flipping the camera (staying within -90 to 90 degrees)
                 GameState.phi = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, GameState.phi));
@@ -423,13 +430,13 @@ async function initWebGPU() {
         lastTouchY = null;
         initialPinchDistance = null;
     });
-
+    
     // Add scroll wheel event listener to adjust FOV
     canvas.addEventListener('wheel', (event) => {
-        GameState.fov += event.deltaY * scrollSensitivity;
+        GameState.fov += event.deltaY * PlayerSettings.scrollSensitivity;
         
         // Clamp FOV between 30 and 150 degrees to avoid extreme distortion
-        GameState.fov = Math.max(30.0, Math.min(150.0, GameState.fov));
+        GameState.fov = Math.max(1.0, Math.min(150.0, GameState.fov));
         
         event.preventDefault();
     });
@@ -497,9 +504,8 @@ async function initWebGPU() {
         GameState.moveKeys--;
       }
     });
-    
-    // Start rendering loop
-    renderFrame();
-}
 
-initWebGPU();
+
+    initWebGPU();
+};
+
