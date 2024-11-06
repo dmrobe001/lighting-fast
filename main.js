@@ -102,23 +102,12 @@ async function initWebGPU() {
     // Initialize WebGPU
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
-    const context = canvas.getContext('webgpu');
-    const swapChainFormat = 'rgba8unorm';
-    context.configure({
-        device,
-        format: swapChainFormat,
-        usage: GPUTextureUsage.TEXTURE_BINDING |
-            GPUTextureUsage.COPY_DST |
-            GPUTextureUsage.RENDER_ATTACHMENT,
-    });
     // Create a buffer for sphere data
     const sphereBuffer = device.createBuffer({
         size: GameState.sphereData.length * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         mappedAtCreation: true,
     });
-    const skyboxTexture = await loadTexture(device, 'starmap_2020_4k_print.jpg');
-    // Fill the sphere buffer with sphere data
     new Float32Array(sphereBuffer.getMappedRange()).set(GameState.sphereData);
     sphereBuffer.unmap();
     const sceneBuffer = device.createBuffer({
@@ -132,16 +121,9 @@ async function initWebGPU() {
         usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
     });
     // Create shader module
-    const shaderModule = device.createShaderModule({
-        code: await fetch('path_tracing.wgsl').then((res) => res.text()),
-    });
-    // Load shaders for blitting
-    const blitVertexShaderModule = device.createShaderModule({
-        code: await fetch('vertex_blit.wgsl').then((res) => res.text()),
-    });
-    const blitFragmentShaderModule = device.createShaderModule({
-        code: await fetch('fragment_blit.wgsl').then((res) => res.text()),
-    });
+    const shaderModule = device.createShaderModule({ code: await fetch('path_tracing.wgsl').then((res) => res.text()), });
+    const blitVertexShaderModule = device.createShaderModule({ code: await fetch('vertex_blit.wgsl').then((res) => res.text()), });
+    const blitFragmentShaderModule = device.createShaderModule({ code: await fetch('fragment_blit.wgsl').then((res) => res.text()), });
     // Define a simple render pipeline for blitting
     const blitPipeline = device.createRenderPipeline({
         layout: 'auto',
@@ -154,7 +136,7 @@ async function initWebGPU() {
             entryPoint: 'main_fragment',
             targets: [
                 {
-                    format: swapChainFormat,
+                    format: 'rgba8unorm',
                 },
             ],
         },
@@ -195,18 +177,17 @@ async function initWebGPU() {
             },
         ],
     });
-    // Create a pipeline layout using the bind group layout
-    const pipelineLayout = device.createPipelineLayout({
-        bindGroupLayouts: [bindGroupLayout],
-    });
     // Create the compute pipeline
     const computePipeline = device.createComputePipeline({
-        layout: pipelineLayout,
+        layout: device.createPipelineLayout({
+            bindGroupLayouts: [bindGroupLayout],
+        }),
         compute: {
             module: shaderModule,
             entryPoint: 'main',
         },
     });
+    const skyboxTextureView = (await loadTexture(device, 'starmap_2020_4k_print.jpg')).createView();
     // Create bind groups
     function createBindGroup(currentSceneBuffer, writeTexture) {
         return device.createBindGroup({
@@ -215,7 +196,7 @@ async function initWebGPU() {
                 { binding: 0, resource: { buffer: sphereBuffer } },
                 { binding: 1, resource: { buffer: currentSceneBuffer } },
                 { binding: 2, resource: writeTexture.createView() }, // Write to this texture
-                { binding: 3, resource: skyboxTexture.createView() }, // Read from this texture
+                { binding: 3, resource: skyboxTextureView }, // Read from this texture
             ],
         });
     }
@@ -223,6 +204,14 @@ async function initWebGPU() {
     const sampler = device.createSampler({
         magFilter: 'linear',
         minFilter: 'linear',
+    });
+    const context = canvas.getContext('webgpu');
+    context.configure({
+        device,
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING |
+            GPUTextureUsage.COPY_DST |
+            GPUTextureUsage.RENDER_ATTACHMENT,
     });
     // Add function to blit the texture to the canvas
     function blitTextureToCanvas(texture) {
@@ -263,19 +252,6 @@ async function initWebGPU() {
         passEncoder.end();
         // Submit the commands
         device.queue.submit([commandEncoder.finish()]);
-        const textureView = context.getCurrentTexture().createView();
-        const renderPassDescriptor = {
-            colorAttachments: [{
-                    view: textureView,
-                    loadOp: "clear",
-                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
-                    storeOp: "store",
-                }],
-        };
-        const renderEncoder = device.createCommandEncoder();
-        const renderPass = renderEncoder.beginRenderPass(renderPassDescriptor);
-        renderPass.end();
-        device.queue.submit([renderEncoder.finish()]);
         blitTextureToCanvas(computeTexture);
         // Request the next frame
         requestAnimationFrame(renderFrame);
