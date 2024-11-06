@@ -126,7 +126,6 @@ const PlayerSettings = {
     
 
 async function initWebGPU() {
-
     
     // Initialize WebGPU
     const adapter = await navigator.gpu.requestAdapter();
@@ -226,19 +225,6 @@ async function initWebGPU() {
     
     const skyboxTextureView = (await loadTexture(device, 'starmap_2020_4k_print.jpg')).createView();
     
-    // Create bind groups
-    function createBindGroup(currentSceneBuffer:GPUBuffer,writeTexture:GPUTexture) {
-        return device.createBindGroup({
-            layout: bindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer:sphereBuffer } },
-                { binding: 1, resource: { buffer:currentSceneBuffer } },
-                { binding: 2, resource: writeTexture.createView() },  // Write to this texture
-                { binding: 3, resource: skyboxTextureView },   // Read from this texture
-            ],
-        });
-    }
-    
     // Create a sampler for the texture
     const sampler = device.createSampler({
         magFilter: 'linear',
@@ -253,54 +239,59 @@ async function initWebGPU() {
                GPUTextureUsage.COPY_DST |
                GPUTextureUsage.RENDER_ATTACHMENT,
     });
-    // Add function to blit the texture to the canvas
-    function blitTextureToCanvas(texture: GPUTexture) {
-        const commandEncoder = device.createCommandEncoder();
 
+    const renderBindGroup = device.createBindGroup({
+        layout: blitPipeline.getBindGroupLayout(0),
+        entries: [
+            { binding: 0, resource: sampler },
+            { binding: 1, resource: computeTexture.createView() },
+        ],
+    })
+    
+    const bindGroup = device.createBindGroup({
+        layout: bindGroupLayout,
+        entries: [
+            { binding: 0, resource: { buffer:sphereBuffer } },
+            { binding: 1, resource: { buffer:sceneBuffer } },
+            { binding: 2, resource: computeTexture.createView() },  // Write to this texture
+            { binding: 3, resource: skyboxTextureView },   // Read from this texture
+        ],
+    });
+
+
+    async function renderFrame() {
+        DerivedState.move_camera();
+        const paddedSceneData = DerivedState.buffer;
+        
+        device.queue.writeBuffer(sceneBuffer, 0, paddedSceneData.buffer, 0, paddedSceneData.length*4);
+            
+        // Command encoder and compute pass
+        const commandEncoder = device.createCommandEncoder();
+        const computePassEncoder = commandEncoder.beginComputePass();
+        computePassEncoder.setPipeline(computePipeline);
+        computePassEncoder.setBindGroup(0, bindGroup);
+        computePassEncoder.dispatchWorkgroups(Math.ceil(PlayerSettings.width / 16), Math.ceil(PlayerSettings.height / 16));
+        computePassEncoder.end();
+        
         const renderPassDescriptor:GPURenderPassDescriptor = {
             colorAttachments: [{
+                // this has to be redone every frame because the non "current texture" has been destroyed
                 view: context.getCurrentTexture().createView(),
                 loadOp: 'clear',
                 clearValue: { r: 0, g: 0, b: 0, a: 1 },
                 storeOp: 'store',
             }],
         };
+        const renderPassEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+        renderPassEncoder.setPipeline(blitPipeline);
+        renderPassEncoder.setBindGroup(0, renderBindGroup);
+        renderPassEncoder.draw(6, 1, 0, 0);
+        renderPassEncoder.end();
 
-        const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-        passEncoder.setPipeline(blitPipeline);
-        passEncoder.setBindGroup(0, device.createBindGroup({
-            layout: blitPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: sampler },
-                { binding: 1, resource: texture.createView() },
-            ],
-        }));
-        passEncoder.draw(6, 1, 0, 0);
-        passEncoder.end();
-
-        device.queue.submit([commandEncoder.finish()]);
-    }
-    
-    // 
-    async function renderFrame() {
-        DerivedState.move_camera();
-        const paddedSceneData = DerivedState.buffer;
-        
-        device.queue.writeBuffer(sceneBuffer, 0, paddedSceneData.buffer, 0, paddedSceneData.length*4);
-        const bindGroup = createBindGroup(sceneBuffer,computeTexture);
-        
-        // Command encoder and compute pass
-        const commandEncoder = device.createCommandEncoder();
-        const passEncoder = commandEncoder.beginComputePass();
-        passEncoder.setPipeline(computePipeline);
-        passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.dispatchWorkgroups(Math.ceil(PlayerSettings.width / 16), Math.ceil(PlayerSettings.height / 16));
-        passEncoder.end();
-        
         // Submit the commands
         device.queue.submit([commandEncoder.finish()]);
 
-        blitTextureToCanvas(computeTexture);
+        //blitTextureToCanvas(computeTexture);
         // Request the next frame
         requestAnimationFrame(renderFrame);
     }
