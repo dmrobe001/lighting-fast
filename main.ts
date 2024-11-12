@@ -40,7 +40,6 @@ async function loadTexture(device: GPUDevice, url: string): Promise<GPUTexture> 
     });
 }
 
-//
 const GameState = {
     skyColors:[[0.5, 0.7, 1.0],[1.0, 0.9, 0.8]],
     
@@ -123,113 +122,167 @@ const PlayerSettings = {
     width:100,
     height:100
 }
+
+async function initComputePipeline(device: GPUDevice): Promise<[GPUBindGroup,GPUComputePipeline, GPUTexture, GPUBuffer]>{
     
+    // Create shader module
+    const pathTracingModule = device.createShaderModule({code: await fetch('path_tracing.wgsl').then((res) => res.text()),});
+    // load skybox texture
+    const skyboxTextureView = (await loadTexture(device, 'starmap_2020_4k_print.jpg')).createView();
+
+    return new Promise((resolve) => {
+    
+        // Create a buffer for sphere data
+        const sphereBuffer = device.createBuffer({
+            size: GameState.sphereData.length * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Float32Array(sphereBuffer.getMappedRange()).set(GameState.sphereData);
+        sphereBuffer.unmap();
+        
+        const sceneBuffer = device.createBuffer({
+            size: DerivedState.buffer.length*4,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+        
+        const computeTexture = device.createTexture( {
+            size: [PlayerSettings.width, PlayerSettings.height, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+    
+        // Define a bind group layout
+        const computeBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'read-only-storage' }, // Sphere buffer
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'uniform' }, // Scene buffer
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.COMPUTE,
+                    storageTexture: {
+                        access: 'write-only',
+                        format: 'rgba8unorm',
+                        viewDimension: '2d',
+                    },
+                },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.COMPUTE,
+                    texture: {
+                        sampleType: 'float',      // Use 'float' for f32 sampled textures
+                        viewDimension: '2d',
+                        multisampled: false,       // Not multisampled
+                    },
+                },
+            ],
+        });
+        
+        const computeBindGroup = device.createBindGroup({
+            layout: computeBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer:sphereBuffer } },
+                { binding: 1, resource: { buffer:sceneBuffer } },
+                { binding: 2, resource: computeTexture.createView() },  // Write to this texture
+                { binding: 3, resource: skyboxTextureView },   // Read from this texture
+            ],
+        });
+        
+        // Create the compute pipeline
+        const computePipeline = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [computeBindGroupLayout],
+            }),
+            compute: {
+                module: pathTracingModule,
+                entryPoint: 'main',
+            },
+        });
+        resolve( [computeBindGroup,computePipeline,computeTexture,sceneBuffer])
+    });
+}
+
+async function initRenderPipeline(device: GPUDevice,computeTexture: GPUTexture): Promise<[GPUBindGroup,GPURenderPipeline]>{
+
+    const blitVertexShaderModule = device.createShaderModule({code: await fetch('vertex_blit.wgsl').then((res) => res.text()),});
+    const blitFragmentShaderModule = device.createShaderModule({code: await fetch('fragment_blit.wgsl').then((res) => res.text()),});
+
+    return new Promise((resolve) => {
+        
+    
+        // Create a sampler for the texture
+        const sampler = device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+        });
+
+        // Define a bind group layout
+        const renderBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    sampler: {}
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: {},
+                },
+            ],
+        });
+
+        const renderBindGroup = device.createBindGroup({
+            layout:  renderBindGroupLayout,
+            entries: [
+                { binding: 0, resource: sampler },
+                { binding: 1, resource: computeTexture.createView() },
+            ],
+        })
+
+        // Define a simple render pipeline for blitting
+        const renderPipeline = device.createRenderPipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [renderBindGroupLayout],
+            }),
+            vertex: {
+                module: blitVertexShaderModule,
+                entryPoint: 'main_vertex',
+            },
+            fragment: {
+                module: blitFragmentShaderModule,
+                entryPoint: 'main_fragment',
+                targets: [
+                    {
+                        format: 'rgba8unorm',
+                    },
+                ],
+            },
+            primitive: {
+                topology: 'triangle-list',
+            },
+        });
+        resolve( [renderBindGroup,renderPipeline])
+    });
+}
 
 async function initWebGPU() {
     
     // Initialize WebGPU
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
-    
-    // Create a buffer for sphere data
-    const sphereBuffer = device.createBuffer({
-        size: GameState.sphereData.length * 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: true,
-    });
-    new Float32Array(sphereBuffer.getMappedRange()).set(GameState.sphereData);
-    sphereBuffer.unmap();
-    
-    const sceneBuffer = device.createBuffer({
-        size: DerivedState.buffer.length*4,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: false,
-    });
-    
-    const computeTexture = device.createTexture( {
-        size: [PlayerSettings.width, PlayerSettings.height, 1],
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
 
-    // Create shader module
-    const pathTracingModule = device.createShaderModule({code: await fetch('path_tracing.wgsl').then((res) => res.text()),});
-    const blitVertexShaderModule = device.createShaderModule({code: await fetch('vertex_blit.wgsl').then((res) => res.text()),});
-    const blitFragmentShaderModule = device.createShaderModule({code: await fetch('fragment_blit.wgsl').then((res) => res.text()),});
-
-    // Define a simple render pipeline for blitting
-    const blitPipeline = device.createRenderPipeline({
-        layout: 'auto',
-        vertex: {
-            module: blitVertexShaderModule,
-            entryPoint: 'main_vertex',
-        },
-        fragment: {
-            module: blitFragmentShaderModule,
-            entryPoint: 'main_fragment',
-            targets: [
-                {
-                    format: 'rgba8unorm',
-                },
-            ],
-        },
-        primitive: {
-            topology: 'triangle-list',
-        },
-    });
-
-    // Define a bind group layout
-    const bindGroupLayout = device.createBindGroupLayout({
-        entries: [
-            {
-                binding: 0,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: { type: 'read-only-storage' }, // Sphere buffer
-            },
-            {
-                binding: 1,
-                visibility: GPUShaderStage.COMPUTE,
-                buffer: { type: 'uniform' }, // Scene buffer
-            },
-            {
-                binding: 2,
-                visibility: GPUShaderStage.COMPUTE,
-                storageTexture: {
-                    access: 'write-only',
-                    format: 'rgba8unorm',
-                    viewDimension: '2d',
-                },
-            },
-            {
-                binding: 3,
-                visibility: GPUShaderStage.COMPUTE,
-                texture: {
-                    sampleType: 'float',      // Use 'float' for f32 sampled textures
-                    viewDimension: '2d',
-                    multisampled: false,       // Not multisampled
-                },
-            },
-        ],
-    });
-    
-    // Create the compute pipeline
-    const computePipeline = device.createComputePipeline({
-        layout: device.createPipelineLayout({
-            bindGroupLayouts: [bindGroupLayout],
-        }),
-        compute: {
-            module: pathTracingModule,
-            entryPoint: 'main',
-        },
-    });
-    
-    const skyboxTextureView = (await loadTexture(device, 'starmap_2020_4k_print.jpg')).createView();
-    
-    // Create a sampler for the texture
-    const sampler = device.createSampler({
-        magFilter: 'linear',
-        minFilter: 'linear',
-    });
+    const [computeBindGroup, computePipeline, computeTexture,sceneBuffer] = await initComputePipeline(device);
+    const [renderBindGroup, renderPipeline] = await initRenderPipeline(device,computeTexture);
 
     const context = canvas.getContext('webgpu');
     context.configure({
@@ -240,36 +293,17 @@ async function initWebGPU() {
                GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
-    const renderBindGroup = device.createBindGroup({
-        layout: blitPipeline.getBindGroupLayout(0),
-        entries: [
-            { binding: 0, resource: sampler },
-            { binding: 1, resource: computeTexture.createView() },
-        ],
-    })
-    
-    const bindGroup = device.createBindGroup({
-        layout: bindGroupLayout,
-        entries: [
-            { binding: 0, resource: { buffer:sphereBuffer } },
-            { binding: 1, resource: { buffer:sceneBuffer } },
-            { binding: 2, resource: computeTexture.createView() },  // Write to this texture
-            { binding: 3, resource: skyboxTextureView },   // Read from this texture
-        ],
-    });
-
-
     async function renderFrame() {
         DerivedState.move_camera();
         const paddedSceneData = DerivedState.buffer;
         
         device.queue.writeBuffer(sceneBuffer, 0, paddedSceneData.buffer, 0, paddedSceneData.length*4);
-            
+        
         // Command encoder and compute pass
         const commandEncoder = device.createCommandEncoder();
         const computePassEncoder = commandEncoder.beginComputePass();
         computePassEncoder.setPipeline(computePipeline);
-        computePassEncoder.setBindGroup(0, bindGroup);
+        computePassEncoder.setBindGroup(0, computeBindGroup);
         computePassEncoder.dispatchWorkgroups(Math.ceil(PlayerSettings.width / 16), Math.ceil(PlayerSettings.height / 16));
         computePassEncoder.end();
         
@@ -283,7 +317,7 @@ async function initWebGPU() {
             }],
         };
         const renderPassEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-        renderPassEncoder.setPipeline(blitPipeline);
+        renderPassEncoder.setPipeline(renderPipeline);
         renderPassEncoder.setBindGroup(0, renderBindGroup);
         renderPassEncoder.draw(6, 1, 0, 0);
         renderPassEncoder.end();
@@ -299,8 +333,6 @@ async function initWebGPU() {
     // Start rendering loop
     renderFrame();
 }
-
-
 
 window.onload=function(){
     canvas = document.querySelector('canvas');
